@@ -1,0 +1,106 @@
+---
+title: "Phillies Questionnaire"
+author: "Drew Grier"
+date: "2022-12-04"
+output: pdf_document
+---
+
+```{r libraries, echo = FALSE, include = FALSE}
+library(tidyverse)
+library(dplyr)
+library(mosaic)
+library(xgboost)
+library(readr)
+
+questionnaire_data <- read.csv("C:/Users/Drew Grier/Downloads/batting.csv")
+```
+
+# Questionnaire Data Analysis
+
+## Introduction
+
+Prediction modeling and machine learning are the norm for MLB front offices today. Many models can be simple running from linear regression to advanced neural network learning. But there is an problem right at the start to this project. We're predicting a stat that is largely affected by how a player starts their season and since were only given two months of data this will be heavily weighted. Therefore, the use of regression is super important here for our prediction. 
+
+## Initial Model Building
+
+We're going to use a multi-level regression model to predict the OBP's for reach player. It makes senes to use regression because overtime a player will regress to some baseline level whether that is the league level or this own historical baseline. It's just the nature of baseball.
+
+We first need to clean the data in order to work with it. Since everything is labeled as a "char" we cannot run a model without changing these into numbers. Then we can fit the model with all the variables besides ABs, Runs, RBIs, and Stolen Bases as these have no effect on OBP. Here we will see how all the variables interact with the outcome.
+
+```{r the data we want, echo = TRUE}
+# data cleaning and first model
+data_numeric <- questionnaire_data %>%
+  mutate(MarApr_BB. = parse_number(MarApr_BB.),
+         MarApr_K. = parse_number(MarApr_K.),
+         MarApr_LD. = parse_number(MarApr_LD.),
+         MarApr_GB. = parse_number(MarApr_GB.),
+         MarApr_FB. = parse_number(MarApr_FB.),
+         MarApr_IFFB. = parse_number(MarApr_IFFB.),
+         MarApr_HR.FB = parse_number(MarApr_HR.FB),
+         MarApr_O.Swing. = parse_number(MarApr_O.Swing.),
+         MarApr_Z.Swing. = parse_number(MarApr_Z.Swing.),
+         MarApr_Swing. = parse_number(MarApr_Swing.),
+         MarApr_O.Contact. = parse_number(MarApr_O.Contact.),
+         MarApr_Z.Contact. = parse_number(MarApr_Z.Contact.),
+         MarApr_Contact. = parse_number(MarApr_Contact.))
+
+model <- lm(MarApr_OBP ~ MarApr_PA + MarApr_H + MarApr_HR + MarApr_BB. + MarApr_K. + MarApr_ISO + MarApr_BABIP + MarApr_AVG + MarApr_SLG + MarApr_LD. + MarApr_GB. + MarApr_FB. + MarApr_IFFB. + MarApr_HR.FB + MarApr_O.Swing. + MarApr_Z.Swing. + MarApr_Swing. + MarApr_O.Contact. + MarApr_Z.Contact. + MarApr_Contact., data = data_numeric)
+
+summary(model)
+```
+
+From the first model we can see how many of the variables have little to no effect on the model. This will let us narrow down our focus to look at variables that a great predictors of OBP. Just based on our first model we can pick the Home Run per Fly Ball rate, the players SLG, BABIP, ISO, K%, and finally BB%. These six were the only variables to show significance with Home Run per Fly Ball and BB% having the most significance on OBP. We can narrow the model down to taking out BABIP and K% as the addition of either of these two variables increased the $R^{2}$ value each time. Our model produces an $R^{2}$ value of .966 which means our model is extremely well fit for predicting the March and April OBP.
+
+```{r second model, echo = TRUE}
+# build a better model
+model2 <- lm(MarApr_OBP ~ MarApr_BB. + MarApr_ISO + MarApr_SLG + MarApr_HR.FB, data = data_numeric)
+
+summary(model2)
+```
+
+## Prediction for EoY
+
+We can now take our model and apply it to end of year predictions. However, before we do that we need to substitute some values for the players to regress to. This is because we only have one month of stats there is not enough data for a player to be labeled off of.
+
+For this we will be using a "multiplier" of plate appearances over 400. This number is significant because 400 is the typical number of at bats for a person that is valuable to a team, someone who plays around 120 games. As mentioned earlier we need some data in order to regress the final stats to a mean and in order to do that we will be using the league average of these stats for the 2019 season.
+
+```{r prediction model, echo = TRUE}
+data_numeric1 <- data_numeric %>%
+  mutate(multiplier = MarApr_PA/400)%>%
+  mutate(BB_percent = MarApr_BB. * multiplier + .085*(1-multiplier),
+         ISO = MarApr_ISO * multiplier + .183*(1-multiplier),
+         SLG = MarApr_SLG * multiplier + .435*(1-multiplier),
+         HR_per_FB = MarApr_HR.FB * multiplier + .10*(1-multiplier))
+
+prediction_model <- predict(model2, newdata = data_numeric1) # predict the full season OBP based on league averages
+
+data_numeric$predict_OBP <- prediction_model # put the new predicted OBP's back into the data frame for visuals
+
+histogram <- ggplot(data_numeric, aes(x = predict_OBP))+
+  geom_histogram(color = "#000000", fill = "#0099F8", bins = 15) +
+  theme_gray() +
+  labs(x = "OBP Prediction", y = "Number of Batters")
+
+histogram #histogram of the newly predicted OBP's
+
+relationship_plot <- ggplot(data_numeric, aes(x = FullSeason_OBP, y = predict_OBP)) +
+  geom_point(size = 2) +
+  geom_abline(color = "purple") +
+  theme_gray() +
+  labs(x = "Full Season OBP", y = "OBP Prediction")
+
+relationship_plot #showing the relationship between the prediction and the values given to us for the full season.
+```
+
+## Evaluating our Model
+
+Overall this is not a very accurate model for full season predictions. This is a simple multiple linear regression model and therefore does not have the ability to account for biases with the data. I have a couple inferences on why my prediction came out the way it did. First of all, our data came out the way we wanted it to, normally distributed with the majority of the data at an OBP mean of about .330, which is actually the league average for OBP. This means the model is doing what we want it to do, but I believe that the model is weighing the PA's of just this one month more than it is the entire season. This is most likely why it is predicting MUCH higher OBP's for people that did not actually have a good OBP such as Elvis Andrus who had a predicted OBP of .419 but actually had an OBP of .313. This is most likely due to the hot start he got off to, but eventually cooled off over the rest of the season. I am not sure how to make the weight of this month's data less, but that would most likely resolve the problem. The model's performance is also only evaluated on the $R^{2}$ value which is not the best evaluator of accuracy. A better model performance evaluator would be using Mean Average Error because it penalizes each error equally. 
+
+### View Prediction vs Actual
+
+```{r predict vs actual, echo = TRUE}
+data_numeric$Diff <- data_numeric$predict_OBP - data_numeric$FullSeason_OBP
+head(data_numeric$Diff)
+```
+
+We can look at how far our model is off by creating a difference variable that shows numerically how far off the prediction is from the full season. Here we just look at the first 5 for reference. Obviously our model is overestimating as most of our 5 obervations are over 100 points better than the actual OBP. 
